@@ -1,0 +1,45 @@
+# Unity generated folders
+/[Ll]ibrary/
+/[Tt]emp/
+/[Oo]bj/
+/[Bb]uild/
+/[Bb]uilds/
+/[Ll]ogs/
+/[Uu]ser[Ss]ettings/
+/[Mm]emoryCaptures/
+/[Rr]ecordings/
+
+# Asset store tools
+/[Aa]ssets/AssetStoreTools*
+
+# Visual Studio / VS Code / JetBrains Rider cache & project files
+.vs/
+.idea/
+.vscode/
+*.csproj
+*.unityproj
+*.sln
+*.suo
+*.user
+*.userprefs
+*.pidb
+*.booproj
+*.svd
+*.pdb
+*.opendb
+
+# Unity 3D generated meta files
+*.pidb.meta
+*.pdb.meta
+*.mdb.meta
+
+# Unity Crash Reports
+sysinfo.txt
+crash*
+
+# OS generated files
+.DS_Store*
+Thumbs.db
+ehthumbs.db
+[Nn]esktop.ini
+
