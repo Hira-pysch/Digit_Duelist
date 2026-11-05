@@ -121,6 +121,7 @@ namespace DigitDuelist
             // Auto-ensure all modular managers exist at runtime
             if (FindFirstObjectByType<LevelUpgradeManager>() == null) gameObject.AddComponent<LevelUpgradeManager>();
             if (FindFirstObjectByType<BossChoiceFlipper>() == null) gameObject.AddComponent<BossChoiceFlipper>();
+            if (FindFirstObjectByType<StageBackgroundManager>() == null) gameObject.AddComponent<StageBackgroundManager>();
             if (FindFirstObjectByType<KidAudioManager>() == null) gameObject.AddComponent<KidAudioManager>();
             if (FindFirstObjectByType<GameModeManager>() == null) gameObject.AddComponent<GameModeManager>();
             if (FindFirstObjectByType<AssistSpellsController>() == null) gameObject.AddComponent<AssistSpellsController>();

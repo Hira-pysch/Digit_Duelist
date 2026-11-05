@@ -18,6 +18,10 @@ namespace DigitDuelist
         [Header("Button References (4 Choices)")]
         [SerializeField] private RectTransform[] choiceButtonRects = new RectTransform[4];
 
+        [Header("Disruption Settings")]
+        [Tooltip("When true, choice buttons swap positions during boss battles.")]
+        [SerializeField] private bool enableButtonSwapping = true;
+
         [Header("Disruption Timing")]
         [Tooltip("Seconds after a question begins before triggering a mid-question button swap.")]
         [SerializeField] private float midTurnSwapDelay = 2.8f;
@@ -30,8 +34,8 @@ namespace DigitDuelist
         [SerializeField] private bool showPreSwapWarning = true;
         [SerializeField] private float warningDuration = 0.35f;
 
-        // Default 2x2 grid home positions
-        private Vector2[] homeGridPositions = new Vector2[4]
+        // Immutable standard 2x2 grid slot coordinates
+        public static readonly Vector2[] SlotPositions = new Vector2[4]
         {
             new Vector2(-160f, -110f), // Slot 0: Top-Left
             new Vector2(160f, -110f),  // Slot 1: Top-Right
@@ -39,8 +43,13 @@ namespace DigitDuelist
             new Vector2(160f, -190f)   // Slot 3: Bottom-Right
         };
 
-        // Tracks which button RectTransform is currently at which home slot
-        private int[] currentSlotMapping = new int[4] { 0, 1, 2, 3 };
+        // buttonAtSlot[s] tracks which choice button GameObject index (0..3) currently occupies slot s.
+        // This guarantees a strict 1-to-1 bijection so buttons can NEVER overlap or combine.
+        private int[] buttonAtSlot = new int[4] { 0, 1, 2, 3 };
+
+        // Active swap tracking to safely resolve mid-flight interruptions
+        private int activeSwapSlotA = -1, activeSwapSlotB = -1, activeSwapSlotC = -1, activeSwapSlotD = -1;
+        private int activeSwapBtnA = -1, activeSwapBtnB = -1, activeSwapBtnC = -1, activeSwapBtnD = -1;
 
         private Coroutine activeSwapRoutine;
         private Coroutine activeDisruptionTimer;
@@ -59,7 +68,7 @@ namespace DigitDuelist
         private void Start()
         {
             AutoFindButtonRects();
-            CacheHomePositions();
+            ResetButtonsToDefaultHomePositions();
         }
 
         private void AutoFindButtonRects()
@@ -77,40 +86,62 @@ namespace DigitDuelist
             }
         }
 
-        private void CacheHomePositions()
-        {
-            for (int i = 0; i < 4; i++)
-            {
-                if (choiceButtonRects[i] != null)
-                {
-                    homeGridPositions[i] = choiceButtonRects[i].anchoredPosition;
-                    currentSlotMapping[i] = i;
-                }
-            }
-        }
-
         /// <summary>
         /// Called when a new question is delivered.
-        /// If the current duel is a Boss fight (Lv. 5, 10, 15), arms the cognitive disruption.
+        /// If button swapping is enabled and the duel is a Boss fight, arms the cognitive disruption.
         /// </summary>
         public void OnNewQuestionStarted(bool isBossLevel)
         {
-            StopAllCoroutines();
-            isSwapping = false;
+            StopAllRunningCoroutines();
 
-            if (!isBossLevel)
+            // Always ensure buttons begin each question cleanly in their standard slots
+            ResetButtonsToDefaultHomePositions();
+
+            if (!enableButtonSwapping || !isBossLevel)
             {
-                ResetButtonsToDefaultHomePositions();
                 return;
             }
 
             activeDisruptionTimer = StartCoroutine(BossDisruptionCycleRoutine());
         }
 
+        /// <summary>
+        /// Called when the player submits an answer, turns timeout, or the turn ends.
+        /// Immediately completes any mid-flight animation and snaps buttons to valid slots.
+        /// </summary>
+        public void OnTurnEnded()
+        {
+            StopAllRunningCoroutines();
+            SnapAllButtonsToSlots();
+        }
+
+        private void StopAllRunningCoroutines()
+        {
+            if (activeDisruptionTimer != null)
+            {
+                StopCoroutine(activeDisruptionTimer);
+                activeDisruptionTimer = null;
+            }
+
+            if (activeSwapRoutine != null)
+            {
+                StopCoroutine(activeSwapRoutine);
+                activeSwapRoutine = null;
+            }
+
+            if (isSwapping)
+            {
+                CompleteActiveSwapImmediately();
+                isSwapping = false;
+            }
+
+            StopAllCoroutines();
+        }
+
         private void Update()
         {
             // Debug test shortcut: Press 'B' during gameplay to immediately test button choice flipping
-            if (GameInput.GetKeyDown(KeyCode.B))
+            if (enableButtonSwapping && GameInput.GetKeyDown(KeyCode.B))
             {
                 TriggerTestSwap();
             }
@@ -118,16 +149,16 @@ namespace DigitDuelist
 
         public void TriggerTestSwap()
         {
-            StopAllCoroutines();
+            StopAllRunningCoroutines();
             if (CombatFXController.Instance != null)
             {
                 CombatFXController.Instance.SpawnFloatingText(Vector3.up * 1.5f, "👑 CHOICE FLIP ACTIVATED!", new Color(1f, 0.85f, 0.2f), 4f, true);
             }
-            StartCoroutine(ExecuteSmoothSwapRoutine());
+            activeSwapRoutine = StartCoroutine(ExecuteSmoothSwapRoutine());
         }
 
         /// <summary>
-        /// Manages the boss disruption cycle: initial jitter, mid-turn swap warning, and smooth position exchange.
+        /// Manages the boss disruption cycle: mid-turn swap warning and smooth position exchange.
         /// </summary>
         private IEnumerator BossDisruptionCycleRoutine()
         {
@@ -136,7 +167,6 @@ namespace DigitDuelist
                 CombatFXController.Instance.SpawnFloatingText(Vector3.up * 1.5f, "👑 BOSS BATTLE!\nCHOICES WILL SWAP!", new Color(1f, 0.85f, 0.2f), 4.5f, true);
             }
 
-            // Loop swapping while question is active on boss levels
             while (true)
             {
                 yield return new WaitForSeconds(midTurnSwapDelay);
@@ -144,44 +174,60 @@ namespace DigitDuelist
                 if (GameManager.Instance != null && GameManager.Instance.CurrentState != GameState.Gameplay)
                     yield break;
 
-                // Trigger smooth button swap
-                yield return StartCoroutine(ExecuteSmoothSwapRoutine());
+                activeSwapRoutine = StartCoroutine(ExecuteSmoothSwapRoutine());
+                yield return activeSwapRoutine;
+                activeSwapRoutine = null;
             }
         }
 
         /// <summary>
-        /// Smoothly swaps two or four buttons with an arced leap and scale-flip animation.
+        /// Smoothly swaps button positions using slot-based mapping.
+        /// Targets slots rather than raw indices to ensure buttons NEVER share a coordinate.
         /// </summary>
         public IEnumerator ExecuteSmoothSwapRoutine()
         {
             isSwapping = true;
             AutoFindButtonRects();
 
-            // Pick swap pattern (0: Diagonal Swap 0<->3, 1: Horizontal Flip 0<->1 & 2<->3, 2: Clockwise 4-way shift)
+            // Pick swap pattern across the 4 SLOTS:
+            // 0: Horizontal (Slot 0 <-> Slot 1, Slot 2 <-> Slot 3)
+            // 1: Vertical (Slot 0 <-> Slot 2, Slot 1 <-> Slot 3)
+            // 2: Diagonal (Slot 0 <-> Slot 3, Slot 1 <-> Slot 2)
             int pattern = UnityEngine.Random.Range(0, 3);
-            int idxA = 0, idxB = 1;
-            int idxC = -1, idxD = -1;
+            int slotA = 0, slotB = 1;
+            int slotC = 2, slotD = 3;
 
-            if (pattern == 0) // Diagonal
+            if (pattern == 0) // Horizontal
             {
-                idxA = 0; idxB = 3; // Top-Left <-> Bottom-Right
-                idxC = 1; idxD = 2; // Top-Right <-> Bottom-Left
+                slotA = 0; slotB = 1;
+                slotC = 2; slotD = 3;
             }
-            else if (pattern == 1) // Horizontal
+            else if (pattern == 1) // Vertical
             {
-                idxA = 0; idxB = 1; // Top row
-                idxC = 2; idxD = 3; // Bottom row
+                slotA = 0; slotB = 2;
+                slotC = 1; slotD = 3;
             }
-            else // Vertical
+            else // Diagonal
             {
-                idxA = 0; idxB = 2; // Left column
-                idxC = 1; idxD = 3; // Right column
+                slotA = 0; slotB = 3;
+                slotC = 1; slotD = 2;
             }
+
+            int btnIdxA = buttonAtSlot[slotA];
+            int btnIdxB = buttonAtSlot[slotB];
+            int btnIdxC = buttonAtSlot[slotC];
+            int btnIdxD = buttonAtSlot[slotD];
+
+            // Store active swap state in case of early interruption
+            activeSwapSlotA = slotA; activeSwapSlotB = slotB;
+            activeSwapSlotC = slotC; activeSwapSlotD = slotD;
+            activeSwapBtnA = btnIdxA; activeSwapBtnB = btnIdxB;
+            activeSwapBtnC = btnIdxC; activeSwapBtnD = btnIdxD;
 
             // 1. Subtle Warning Jitter / Anticipation Cue
             if (showPreSwapWarning)
             {
-                yield return StartCoroutine(PlayWarningCueRoutine(idxA, idxB, idxC, idxD));
+                yield return StartCoroutine(PlayWarningCueRoutine(btnIdxA, btnIdxB, btnIdxC, btnIdxD));
             }
 
             if (KidAudioManager.Instance != null)
@@ -190,26 +236,29 @@ namespace DigitDuelist
             }
 
             // 2. Smooth Lerp Swap with Arc Leap
-            RectTransform rectA = choiceButtonRects[idxA];
-            RectTransform rectB = choiceButtonRects[idxB];
-            RectTransform rectC = (idxC >= 0) ? choiceButtonRects[idxC] : null;
-            RectTransform rectD = (idxD >= 0) ? choiceButtonRects[idxD] : null;
+            RectTransform rectA = choiceButtonRects[btnIdxA];
+            RectTransform rectB = choiceButtonRects[btnIdxB];
+            RectTransform rectC = choiceButtonRects[btnIdxC];
+            RectTransform rectD = choiceButtonRects[btnIdxD];
 
-            if (rectA == null || rectB == null)
+            if (rectA == null || rectB == null || rectC == null || rectD == null)
             {
                 isSwapping = false;
                 yield break;
             }
 
-            Vector2 startPosA = rectA.anchoredPosition;
-            Vector2 startPosB = rectB.anchoredPosition;
-            Vector2 startPosC = rectC != null ? rectC.anchoredPosition : Vector2.zero;
-            Vector2 startPosD = rectD != null ? rectD.anchoredPosition : Vector2.zero;
+            // Source and destination are strictly defined by SlotPositions
+            Vector2 startPosA = SlotPositions[slotA];
+            Vector2 targetPosA = SlotPositions[slotB];
 
-            Vector2 targetPosA = startPosB;
-            Vector2 targetPosB = startPosA;
-            Vector2 targetPosC = startPosD;
-            Vector2 targetPosD = startPosC;
+            Vector2 startPosB = SlotPositions[slotB];
+            Vector2 targetPosB = SlotPositions[slotA];
+
+            Vector2 startPosC = SlotPositions[slotC];
+            Vector2 targetPosC = SlotPositions[slotD];
+
+            Vector2 startPosD = SlotPositions[slotD];
+            Vector2 targetPosD = SlotPositions[slotC];
 
             float elapsed = 0f;
             while (elapsed < swapDuration)
@@ -227,19 +276,16 @@ namespace DigitDuelist
                 rectA.anchoredPosition = Vector2.Lerp(startPosA, targetPosA, ease) + new Vector2(0f, arc);
                 rectB.anchoredPosition = Vector2.Lerp(startPosB, targetPosB, ease) - new Vector2(0f, arc);
 
+                // Move Pair 2
+                rectC.anchoredPosition = Vector2.Lerp(startPosC, targetPosC, ease) + new Vector2(0f, -arc * 0.7f);
+                rectD.anchoredPosition = Vector2.Lerp(startPosD, targetPosD, ease) + new Vector2(0f, arc * 0.7f);
+
                 // Scale pulse on flip
-                float scale = Mathf.Lerp(1f, 0.88f, Mathf.Sin(t * Mathf.PI));
+                float scale = Mathf.Lerp(1f, 0.90f, Mathf.Sin(t * Mathf.PI));
                 rectA.localScale = Vector3.one * scale;
                 rectB.localScale = Vector3.one * scale;
-
-                // Move Pair 2 if present
-                if (rectC != null && rectD != null)
-                {
-                    rectC.anchoredPosition = Vector2.Lerp(startPosC, targetPosC, ease) + new Vector2(0f, -arc * 0.7f);
-                    rectD.anchoredPosition = Vector2.Lerp(startPosD, targetPosD, ease) + new Vector2(0f, arc * 0.7f);
-                    rectC.localScale = Vector3.one * scale;
-                    rectD.localScale = Vector3.one * scale;
-                }
+                rectC.localScale = Vector3.one * scale;
+                rectD.localScale = Vector3.one * scale;
 
                 yield return null;
             }
@@ -247,21 +293,71 @@ namespace DigitDuelist
             // Snap cleanly to target coordinates
             rectA.anchoredPosition = targetPosA;
             rectB.anchoredPosition = targetPosB;
+            rectC.anchoredPosition = targetPosC;
+            rectD.anchoredPosition = targetPosD;
+
             rectA.localScale = Vector3.one;
             rectB.localScale = Vector3.one;
+            rectC.localScale = Vector3.one;
+            rectD.localScale = Vector3.one;
 
-            if (rectC != null && rectD != null)
-            {
-                rectC.anchoredPosition = targetPosC;
-                rectD.anchoredPosition = targetPosD;
-                rectC.localScale = Vector3.one;
-                rectD.localScale = Vector3.one;
-            }
+            rectA.localRotation = Quaternion.identity;
+            rectB.localRotation = Quaternion.identity;
+            rectC.localRotation = Quaternion.identity;
+            rectD.localRotation = Quaternion.identity;
+
+            // Update slot tracking strictly
+            buttonAtSlot[slotA] = btnIdxB;
+            buttonAtSlot[slotB] = btnIdxA;
+            buttonAtSlot[slotC] = btnIdxD;
+            buttonAtSlot[slotD] = btnIdxC;
+
+            activeSwapSlotA = activeSwapSlotB = activeSwapSlotC = activeSwapSlotD = -1;
+            activeSwapBtnA = activeSwapBtnB = activeSwapBtnC = activeSwapBtnD = -1;
 
             isSwapping = false;
         }
 
-        private IEnumerator PlayWarningCueRoutine(int a, int b, int c, int d)
+        private void CompleteActiveSwapImmediately()
+        {
+            if (activeSwapSlotA >= 0 && activeSwapSlotB >= 0 && activeSwapSlotC >= 0 && activeSwapSlotD >= 0)
+            {
+                if (activeSwapBtnA >= 0 && choiceButtonRects[activeSwapBtnA] != null)
+                {
+                    choiceButtonRects[activeSwapBtnA].anchoredPosition = SlotPositions[activeSwapSlotB];
+                    choiceButtonRects[activeSwapBtnA].localScale = Vector3.one;
+                    choiceButtonRects[activeSwapBtnA].localRotation = Quaternion.identity;
+                }
+                if (activeSwapBtnB >= 0 && choiceButtonRects[activeSwapBtnB] != null)
+                {
+                    choiceButtonRects[activeSwapBtnB].anchoredPosition = SlotPositions[activeSwapSlotA];
+                    choiceButtonRects[activeSwapBtnB].localScale = Vector3.one;
+                    choiceButtonRects[activeSwapBtnB].localRotation = Quaternion.identity;
+                }
+                if (activeSwapBtnC >= 0 && choiceButtonRects[activeSwapBtnC] != null)
+                {
+                    choiceButtonRects[activeSwapBtnC].anchoredPosition = SlotPositions[activeSwapSlotD];
+                    choiceButtonRects[activeSwapBtnC].localScale = Vector3.one;
+                    choiceButtonRects[activeSwapBtnC].localRotation = Quaternion.identity;
+                }
+                if (activeSwapBtnD >= 0 && choiceButtonRects[activeSwapBtnD] != null)
+                {
+                    choiceButtonRects[activeSwapBtnD].anchoredPosition = SlotPositions[activeSwapSlotC];
+                    choiceButtonRects[activeSwapBtnD].localScale = Vector3.one;
+                    choiceButtonRects[activeSwapBtnD].localRotation = Quaternion.identity;
+                }
+
+                buttonAtSlot[activeSwapSlotA] = activeSwapBtnB;
+                buttonAtSlot[activeSwapSlotB] = activeSwapBtnA;
+                buttonAtSlot[activeSwapSlotC] = activeSwapBtnD;
+                buttonAtSlot[activeSwapSlotD] = activeSwapBtnC;
+
+                activeSwapSlotA = activeSwapSlotB = activeSwapSlotC = activeSwapSlotD = -1;
+                activeSwapBtnA = activeSwapBtnB = activeSwapBtnC = activeSwapBtnD = -1;
+            }
+        }
+
+        private IEnumerator PlayWarningCueRoutine(int btnA, int btnB, int btnC, int btnD)
         {
             float elapsed = 0f;
             while (elapsed < warningDuration)
@@ -269,10 +365,10 @@ namespace DigitDuelist
                 elapsed += Time.deltaTime;
                 float shake = Mathf.Sin(elapsed * 45f) * 3.5f;
 
-                if (choiceButtonRects[a] != null) choiceButtonRects[a].localRotation = Quaternion.Euler(0f, 0f, shake);
-                if (choiceButtonRects[b] != null) choiceButtonRects[b].localRotation = Quaternion.Euler(0f, 0f, -shake);
-                if (c >= 0 && choiceButtonRects[c] != null) choiceButtonRects[c].localRotation = Quaternion.Euler(0f, 0f, -shake);
-                if (d >= 0 && choiceButtonRects[d] != null) choiceButtonRects[d].localRotation = Quaternion.Euler(0f, 0f, shake);
+                if (choiceButtonRects[btnA] != null) choiceButtonRects[btnA].localRotation = Quaternion.Euler(0f, 0f, shake);
+                if (choiceButtonRects[btnB] != null) choiceButtonRects[btnB].localRotation = Quaternion.Euler(0f, 0f, -shake);
+                if (choiceButtonRects[btnC] != null) choiceButtonRects[btnC].localRotation = Quaternion.Euler(0f, 0f, -shake);
+                if (choiceButtonRects[btnD] != null) choiceButtonRects[btnD].localRotation = Quaternion.Euler(0f, 0f, shake);
 
                 yield return null;
             }
@@ -284,18 +380,37 @@ namespace DigitDuelist
         }
 
         /// <summary>
-        /// Restores all buttons back to their default non-boss 2x2 grid home positions.
+        /// Snaps every button into its currently tracked slot coordinate.
+        /// </summary>
+        public void SnapAllButtonsToSlots()
+        {
+            AutoFindButtonRects();
+            for (int s = 0; s < 4; s++)
+            {
+                int btnIdx = buttonAtSlot[s];
+                if (btnIdx >= 0 && btnIdx < 4 && choiceButtonRects[btnIdx] != null)
+                {
+                    choiceButtonRects[btnIdx].anchoredPosition = SlotPositions[s];
+                    choiceButtonRects[btnIdx].localScale = Vector3.one;
+                    choiceButtonRects[btnIdx].localRotation = Quaternion.identity;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Restores all buttons back to their default fixed 2x2 grid home positions.
         /// </summary>
         public void ResetButtonsToDefaultHomePositions()
         {
-            StopAllCoroutines();
-            isSwapping = false;
+            StopAllRunningCoroutines();
+            AutoFindButtonRects();
 
             for (int i = 0; i < 4; i++)
             {
+                buttonAtSlot[i] = i;
                 if (choiceButtonRects[i] != null)
                 {
-                    choiceButtonRects[i].anchoredPosition = homeGridPositions[i];
+                    choiceButtonRects[i].anchoredPosition = SlotPositions[i];
                     choiceButtonRects[i].localScale = Vector3.one;
                     choiceButtonRects[i].localRotation = Quaternion.identity;
                 }

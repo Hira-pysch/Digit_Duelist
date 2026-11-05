@@ -26,6 +26,13 @@ namespace DigitDuelist.Editor
             SkinCustomizationManager skinMgr = managersGo.GetComponent<SkinCustomizationManager>() ?? Undo.AddComponent<SkinCustomizationManager>(managersGo);
             LevelUpgradeManager upgradeMgr = managersGo.GetComponent<LevelUpgradeManager>() ?? Undo.AddComponent<LevelUpgradeManager>(managersGo);
             BossChoiceFlipper flipper = managersGo.GetComponent<BossChoiceFlipper>() ?? Undo.AddComponent<BossChoiceFlipper>(managersGo);
+            StageBackgroundManager bgMgr = managersGo.GetComponent<StageBackgroundManager>() ?? Undo.AddComponent<StageBackgroundManager>(managersGo);
+            if (bgMgr != null)
+            {
+                bgMgr.EnsureMaterialsLoaded();
+                bgMgr.EnsureBackdropQuad();
+                EditorUtility.SetDirty(bgMgr);
+            }
 
             // 2. Find Canvas
             GameObject canvasGo = GameObject.Find("DigitDuelist_Canvas");

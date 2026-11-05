@@ -29,6 +29,9 @@ namespace DigitDuelist.Editor
             DuelController duelController = managersGo.GetComponent<DuelController>() ?? Undo.AddComponent<DuelController>(managersGo);
             MathGenerator mathGenerator = managersGo.GetComponent<MathGenerator>() ?? Undo.AddComponent<MathGenerator>(managersGo);
             UIManager uiManager = managersGo.GetComponent<UIManager>() ?? Undo.AddComponent<UIManager>(managersGo);
+            StageBackgroundManager bgManager = managersGo.GetComponent<StageBackgroundManager>() ?? Undo.AddComponent<StageBackgroundManager>(managersGo);
+            bgManager.EnsureMaterialsLoaded();
+            bgManager.EnsureBackdropQuad();
 
             // 3. Create Canvas
             GameObject canvasGo = GameObject.Find("DigitDuelist_Canvas");

@@ -110,6 +110,13 @@ namespace DigitDuelist
             int level = playerData != null ? playerData.currentLevel : 1;
             bool isBoss = (level > 0 && level % 5 == 0);
 
+            // Update rotating stage background every 5 stages
+            StageBackgroundManager bgMgr = StageBackgroundManager.Instance ?? FindFirstObjectByType<StageBackgroundManager>();
+            if (bgMgr != null)
+            {
+                bgMgr.UpdateBackgroundForStage(level);
+            }
+
             // Asymmetric Enemy Scaling Formula: BaseHP + ((currentLevel - 1) * healthPerLevel)
             int scaledEnemyHp = enemyBaseHealth + ((level - 1) * enemyHealthPerLevel);
 
@@ -180,6 +187,11 @@ namespace DigitDuelist
             if (!isTurnActive) return;
             isTurnActive = false;
 
+            if (BossChoiceFlipper.Instance != null)
+            {
+                BossChoiceFlipper.Instance.OnTurnEnded();
+            }
+
             bool isCorrect = (chosenAnswer == currentQuestion.correctAnswer);
             OnAnswerEvaluated?.Invoke(isCorrect, currentQuestion.correctAnswer);
 
@@ -188,6 +200,11 @@ namespace DigitDuelist
 
         private void HandleTimeout()
         {
+            if (BossChoiceFlipper.Instance != null)
+            {
+                BossChoiceFlipper.Instance.OnTurnEnded();
+            }
+
             OnAnswerEvaluated?.Invoke(false, currentQuestion.correctAnswer);
             PlayerData data = GameManager.Instance != null ? GameManager.Instance.CurrentPlayerData : null;
             StartCoroutine(ResolveTurnRoutine(false, data));
